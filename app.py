@@ -284,4 +284,4 @@ else:
         next_practice_question()
         st.rerun()
 
-    target = st.session_state.
+    target = st.session_state.current_q

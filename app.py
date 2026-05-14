@@ -90,8 +90,6 @@ if 'test_index' not in st.session_state: st.session_state.test_index = 0
 if 'test_score' not in st.session_state: st.session_state.test_score = 0
 if 'test_mistakes' not in st.session_state: st.session_state.test_mistakes = []
 if 'answered' not in st.session_state: st.session_state.answered = False
-
-# ★追加：正解したかどうかを記憶する変数
 if 'is_correct' not in st.session_state: st.session_state.is_correct = None
 
 def generate_options(target):
@@ -179,7 +177,6 @@ def render_form(target, form_id, is_test=False):
                     else:
                         if str(ans).strip().lower() != str(target[k]).lower(): is_all_correct = False
                 
-                # ★修正：正解かどうかを記憶させる
                 st.session_state.is_correct = is_all_correct
                 
                 if is_test:
@@ -188,7 +185,6 @@ def render_form(target, form_id, is_test=False):
                 
                 st.rerun()
 
-    # ★修正：フォームの外側で結果を表示する（画面がリロードされても消えないように）
     if st.session_state.answered and st.session_state.is_correct is not None:
         if st.session_state.is_correct:
             st.success("⭕ 完全正解！")
@@ -285,3 +281,12 @@ else:
         st.rerun()
 
     target = st.session_state.current_q
+    st.subheader(f"【練習問題】この{q_base_choice}に対応するものは？")
+    
+    render_question(target)
+    render_form(target, "practice_form")
+    
+    if st.session_state.answered:
+        if st.button("⏭️ 次の問題へ", type="primary"):
+            next_practice_question()
+            st.rerun()

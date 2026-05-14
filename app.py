@@ -34,12 +34,11 @@ def get_image_base64(smiles):
     return None
 
 # --- 3. 画面レイアウト・サイドバー ---
-st.title("🧪 有機化学 構造クイズ")
+st.title("🧪 有機化学 マスタークイズ")
 
 st.sidebar.subheader("📂 データセット選択")
-dataset_choice = st.sidebar.selectbox("クイズのテーマを選んでください", ["略語編", "慣用名・複素環編"])
+dataset_choice = st.sidebar.selectbox("クイズのテーマ", ["略語編", "慣用名・複素環編"])
 
-# 選択されたデータセットに応じて読み込むファイルを変更
 file_map = {
     "略語編": "compounds_abbr.xlsx",
     "慣用名・複素環編": "compounds_trivial.xlsx"
@@ -47,14 +46,18 @@ file_map = {
 selected_file = file_map[dataset_choice]
 compounds = load_data(selected_file)
 
-# データセットが切り替わったらクイズ状態をリセットする
-if 'current_dataset' not in st.session_state:
-    st.session_state.current_dataset = dataset_choice
+# カラム名の動的設定
+col1_name = "略語" if dataset_choice == "略語編" else "慣用名"
+col2_name = "正式名称" if dataset_choice == "略語編" else "系統名/別名"
 
-if st.session_state.current_dataset != dataset_choice:
-    st.session_state.current_dataset = dataset_choice
-    st.session_state.current_q = None
-    st.session_state.test_active = False
+st.sidebar.divider()
+
+# ★ 新機能：出題ベースの選択
+st.sidebar.subheader("🎯 出題設定")
+q_base_choice = st.sidebar.selectbox(
+    "何を見て答えますか？",
+    ["構造式", f"{col1_name}", f"{col2_name}"]
+)
 
 st.sidebar.divider()
 mode = st.sidebar.radio("モード選択", [
@@ -64,12 +67,21 @@ mode = st.sidebar.radio("モード選択", [
     "📚 一覧（まとめ表示）"
 ])
 
-# データ不足時のエラーハンドリング
 if len(compounds) < 4:
-    st.error(f"【エラー】 `{selected_file}` に化合物を4つ以上登録するか、ファイルを作成してアップロードしてください。（現在: {len(compounds)}個）")
+    st.error(f"【エラー】 `{selected_file}` に化合物を4つ以上登録するか、ファイルを作成してください。")
     st.stop()
 
 # --- 4. セッション管理 ---
+# データセットや出題形式が変わった時はクイズ状態をリセットする
+if 'current_dataset' not in st.session_state: st.session_state.current_dataset = dataset_choice
+if 'current_q_base' not in st.session_state: st.session_state.current_q_base = q_base_choice
+
+if st.session_state.current_dataset != dataset_choice or st.session_state.current_q_base != q_base_choice:
+    st.session_state.current_dataset = dataset_choice
+    st.session_state.current_q_base = q_base_choice
+    st.session_state.current_q = None
+    st.session_state.test_active = False
+
 if 'current_q' not in st.session_state: st.session_state.current_q = None
 if 'test_active' not in st.session_state: st.session_state.test_active = False
 if 'test_q_list' not in st.session_state: st.session_state.test_q_list = []
@@ -81,12 +93,19 @@ if 'answered' not in st.session_state: st.session_state.answered = False
 def generate_options(target):
     wrong_compounds = random.sample([c for c in compounds if c != target], 3)
     opts = [target] + wrong_compounds
+    
     abbr_opts = [opt["abbr"] for opt in opts]
     name_opts = [opt["name"] for opt in opts]
+    struct_opts = [opt["structure"] for opt in opts]
+    
     random.shuffle(abbr_opts)
     random.shuffle(name_opts)
+    random.shuffle(struct_opts)
+    
     st.session_state.abbr_options = abbr_opts
     st.session_state.name_options = name_opts
+    # 構造式はA~Dのラベルをつけて管理
+    st.session_state.struct_options = [{"label": ["A", "B", "C", "D"][i], "smiles": struct_opts[i]} for i in range(4)]
 
 def next_practice_question():
     st.session_state.current_q = random.choice(compounds)
@@ -96,9 +115,75 @@ def next_practice_question():
 if st.session_state.current_q is None:
     next_practice_question()
 
-# 見出しの動的変更
-col1_name = "略語" if dataset_choice == "略語編" else "慣用名"
-col2_name = "正式名称" if dataset_choice == "略語編" else "系統名/別名"
+
+# --- クイズ描画の共通ロジック ---
+base_key_map = {"構造式": "structure", f"{col1_name}": "abbr", f"{col2_name}": "name"}
+q_key = base_key_map[q_base_choice]
+ask_keys = [k for k in ["structure", "abbr", "name"] if k != q_key]
+key_label_map = {"structure": "構造式", "abbr": col1_name, "name": col2_name}
+
+def render_question(target):
+    if q_key == "structure":
+        img = get_structure_image(target['structure'])
+        if img: st.image(img, use_container_width=False)
+        else: st.error("⚠️ 描画エラー")
+    elif q_key == "abbr":
+        st.markdown(f"<h1 style='text-align: center; color: #E91E63; padding: 20px;'>{target['abbr']}</h1>", unsafe_allow_html=True)
+    elif q_key == "name":
+        st.markdown(f"<h1 style='text-align: center; color: #2196F3; padding: 20px;'>{target['name']}</h1>", unsafe_allow_html=True)
+    st.divider()
+
+def render_form(target, form_id, is_test=False):
+    with st.form(form_id):
+        user_answers = {}
+        if "4択" in mode or (is_test and st.session_state.test_type == "4択クイズ"):
+            for i, k in enumerate(ask_keys):
+                st.write(f"**■ {i+1}. 正しい {key_label_map[k]} はどれ？**")
+                if k == "structure":
+                    cols = st.columns(4)
+                    for j, opt in enumerate(st.session_state.struct_options):
+                        img = get_structure_image(opt["smiles"])
+                        if img: cols[j].image(img, caption=f"選択肢 {opt['label']}", use_container_width=True)
+                    user_answers[k] = st.radio(f"{key_label_map[k]}を選択", ["A", "B", "C", "D"], index=None, disabled=st.session_state.answered, horizontal=True)
+                elif k == "abbr":
+                    user_answers[k] = st.radio(f"{key_label_map[k]}を選択", st.session_state.abbr_options, index=None, disabled=st.session_state.answered)
+                elif k == "name":
+                    user_answers[k] = st.radio(f"{key_label_map[k]}を選択", st.session_state.name_options, index=None, disabled=st.session_state.answered)
+                st.write("")
+        else:
+            for k in ask_keys:
+                if k == "structure":
+                    user_answers[k] = st.text_input(f"{key_label_map[k]} (SMILES) を入力 ※激ムズ！", disabled=st.session_state.answered)
+                else:
+                    user_answers[k] = st.text_input(f"{key_label_map[k]} を入力", disabled=st.session_state.answered)
+            
+        submitted = st.form_submit_button("解答する", disabled=st.session_state.answered)
+        
+        if submitted:
+            missing = [k for k in ask_keys if user_answers[k] is None or str(user_answers[k]).strip() == ""]
+            if missing:
+                st.warning("すべての項目を選択・入力してください！")
+            else:
+                st.session_state.answered = True
+                is_all_correct = True
+                
+                for k in ask_keys:
+                    ans = user_answers[k]
+                    if k == "structure" and ("4択" in mode or (is_test and st.session_state.test_type == "4択クイズ")):
+                        selected_opt = next(opt for opt in st.session_state.struct_options if opt["label"] == ans)
+                        if selected_opt["smiles"] != target["structure"]: is_all_correct = False
+                    else:
+                        if str(ans).strip().lower() != str(target[k]).lower(): is_all_correct = False
+                
+                if is_all_correct:
+                    st.success("⭕ 完全正解！")
+                    if is_test: st.session_state.test_score += 1
+                else:
+                    st.error("❌ 不正解...")
+                    st.info(f"**【正解】**\n\n- **{col1_name}**: {target['abbr']}\n- **{col2_name}**: {target['name']}\n- **SMILES**: `{target['structure']}`")
+                    if is_test: st.session_state.test_mistakes.append(target)
+                st.rerun()
+
 
 # --- 5. 各モードのロジック ---
 if mode == "📚 一覧（まとめ表示）":
@@ -141,39 +226,8 @@ elif mode == "💯 実力テスト (スコア測定)":
         st.progress((current_idx) / total_q)
         st.write(f"**第 {current_idx + 1} 問 / 全 {total_q} 問**")
         
-        img = get_structure_image(target['structure'])
-        if img:
-            st.image(img, use_container_width=False)
-        else:
-            st.error(f"⚠️ 構造式の描画エラー\n\n【{col1_name}】{target['abbr']} 【SMILES】{target['structure']}")
-            
-        st.divider()
-
-        with st.form("test_form"):
-            if st.session_state.test_type == "4択クイズ":
-                user_abbr = st.radio(f"① {col1_name}はどれ？", st.session_state.abbr_options, index=None, disabled=st.session_state.answered)
-                user_name = st.radio(f"② {col2_name}はどれ？", st.session_state.name_options, index=None, disabled=st.session_state.answered)
-            else:
-                user_abbr = st.text_input(f"{col1_name}を入力", disabled=st.session_state.answered)
-                user_name = st.text_input(f"{col2_name}を入力", disabled=st.session_state.answered)
-                
-            submitted = st.form_submit_button("解答する", disabled=st.session_state.answered)
-            
-            if submitted:
-                if st.session_state.test_type == "4択クイズ" and (user_abbr is None or user_name is None):
-                    st.warning(f"{col1_name}と{col2_name}の両方を選択してください！")
-                else:
-                    st.session_state.answered = True
-                    is_abbr_ok = (user_abbr.strip().lower() == target["abbr"].lower()) if user_abbr else False
-                    is_name_ok = (user_name.strip().lower() == target["name"].lower()) if user_name else False
-                    
-                    if is_abbr_ok and is_name_ok:
-                        st.success("⭕ 正解！")
-                        st.session_state.test_score += 1
-                    else:
-                        st.error(f"❌ 不正解... 【正解】 {col1_name}: {target['abbr']} / {col2_name}: {target['name']}")
-                        st.session_state.test_mistakes.append(target)
-                    st.rerun()
+        render_question(target)
+        render_form(target, "test_form", is_test=True)
         
         if st.session_state.answered:
             if current_idx + 1 < total_q:
@@ -217,39 +271,10 @@ else:
         st.rerun()
 
     target = st.session_state.current_q
-    st.subheader(f"【練習問題】この化合物の{col1_name}と{col2_name}は？")
-    img = get_structure_image(target['structure'])
+    st.subheader(f"【練習問題】この{q_base_choice}に対応するものは？")
     
-    if img:
-        st.image(img, use_container_width=False)
-    else:
-        st.error(f"⚠️ 構造式の描画エラー\n\n【{col1_name}】{target['abbr']} 【SMILES】{target['structure']}")
-        
-    st.divider()
-
-    with st.form("practice_form"):
-        if "4択" in mode:
-            user_abbr = st.radio(f"① {col1_name}はどれ？", st.session_state.abbr_options, index=None, disabled=st.session_state.answered)
-            user_name = st.radio(f"② {col2_name}はどれ？", st.session_state.name_options, index=None, disabled=st.session_state.answered)
-        else:
-            user_abbr = st.text_input(f"{col1_name}を入力", disabled=st.session_state.answered)
-            user_name = st.text_input(f"{col2_name}を入力", disabled=st.session_state.answered)
-            
-        submitted = st.form_submit_button("解答する", disabled=st.session_state.answered)
-        
-        if submitted:
-            st.session_state.answered = True
-            if "4択" in mode:
-                is_abbr_ok = (user_abbr == target["abbr"])
-                is_name_ok = (user_name == target["name"])
-            else:
-                is_abbr_ok = (user_abbr.strip().lower() == target["abbr"].lower())
-                is_name_ok = (user_name.strip().lower() == target["name"].lower())
-            
-            if is_abbr_ok and is_name_ok:
-                st.success("⭕ 正解です！サイドバーからスキップするか、下のボタンを押してください。")
-            else:
-                st.error(f"❌ 不正解... 【正解】 {col1_name}: {target['abbr']} / {col2_name}: {target['name']}")
+    render_question(target)
+    render_form(target, "practice_form")
     
     if st.session_state.answered:
         if st.button("⏭️ 次の問題へ", type="primary"):
